@@ -268,8 +268,10 @@ def main() -> None:
             vals.append(unknown[i])
             i += 1
         if not vals:
-            parser.error(f"No values provided for argument --{key}")
-        extra_args[key] = vals
+            # store_true argument (boolean flag with no value)
+            extra_args[key] = [True]
+        else:
+            extra_args[key] = vals
 
     # Build cartesian product of all key-values
     keys = list(extra_args.keys())
