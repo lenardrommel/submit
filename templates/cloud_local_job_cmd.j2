@@ -2,7 +2,11 @@
 {{ pre_command }}
 {% endif %}
 {% if pykernel %}
-{{ pykernel }} "python {{ script_path }} {% for k, v in script_args.items() %}{% if v is sameas true %} --{{ k }}{% else %} --{{ k }} {{ v }}{% endif %}{% endfor %}"
+{% for suffix in command_suffixes %}
+{{ pykernel }} "python {{ script_path }} {{ suffix }}"
+{% endfor %}
 {% else %}
-python {{ script_path }} {% for k, v in script_args.items() %}{% if v is sameas true %} --{{ k }}{% else %} --{{ k }} {{ v }}{% endif %}{% endfor %}
+{% for suffix in command_suffixes %}
+python {{ script_path }} {{ suffix }}
+{% endfor %}
 {% endif %}

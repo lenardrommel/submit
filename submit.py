@@ -255,7 +255,22 @@ def main() -> None:
     default_args = script_cfg.get("default_args", {})
 
     # Combine variables to create job arrays
-    extra_args = {k: v if isinstance(v, list) else [v] for k, v in default_args.items()}
+    extra_args = {}
+    batch_sizes = {}
+    
+    for k, v in default_args.items():
+        if isinstance(v, dict) and "values" in v:
+            vals = v["values"]
+            extra_args[k] = vals if isinstance(vals, list) else [vals]
+            if "batch_size" in v:
+                try:
+                    bz = int(v["batch_size"])
+                    if bz > 0:
+                        batch_sizes[k] = bz
+                except (ValueError, TypeError):
+                    pass
+        else:
+            extra_args[k] = v if isinstance(v, list) else [v]
     i = 0
     while i < len(unknown):
         tok = unknown[i]
@@ -274,44 +289,71 @@ def main() -> None:
         else:
             extra_args[key] = vals
 
-    # Build cartesian product of all key-values
     keys = list(extra_args.keys())
-    all_values = [extra_args[k] for k in keys]
+    
+    # Build list of chunks for each parameter
+    param_chunks = []
+    total_commands = 1
+    for k in keys:
+        vals = extra_args[k]
+        total_commands *= len(vals)
+        sz = batch_sizes.get(k, 1) # Default batch size is 1
+        # Create chunks for this parameter
+        chunks = [vals[i:i + sz] for i in range(0, len(vals), sz)]
+        param_chunks.append(chunks)
+
+    # Each combination of chunks corresponds to one Job
+    job_chunk_combos = list(product(*param_chunks))
+    total_jobs = len(job_chunk_combos)
 
     # Show job creation details
-    total_jobs = len(list(product(*all_values)))
-    print(f"Creating {total_jobs} job(s) with the following parameters:")
+    print(f"Creating {total_jobs} job(s) for {total_commands} commands with the following parameters:")
     if keys:
         for key, values in extra_args.items():
             values_str = ", ".join(str(v) for v in values)
-            print(f"  {key}: [{values_str}]")
+            bz_str = f" (batch size: {batch_sizes[key]})" if key in batch_sizes else ""
+            print(f"  {key}: [{values_str}]{bz_str}")
         print()
     else:
         print("  (no parameters specified)")
         print()
 
-    for combo in product(*all_values):
-        # combo is a tuple like ("value1_for_key1", "value_for_key2", ...)
-        combo_dict = dict(zip(keys, combo))
+    # Create sequential command arrays for batch execution
+    for batch_idx, chunk_combo in enumerate(job_chunk_combos):
+        command_suffixes = []
+        # Cartesian product of the chunks to get all commands for this job
+        for val_combo in product(*chunk_combo):
+            combo_dict = dict(zip(keys, val_combo))
+            suffix = " ".join(
+                f"--{k}" if v is True else f"--{k} {v}" 
+                for k, v in combo_dict.items()
+            )
+            command_suffixes.append(suffix)
+            
+        # Determine job name
+        if len(command_suffixes) == 1:
+            val_combo = list(product(*chunk_combo))[0]
+            combo_dict = dict(zip(keys, val_combo))
+            suffix_desc = "_".join(
+                f"{arg_to_string(k)}={arg_to_string(v)}" for k, v in combo_dict.items()
+            )
+            name = args.script if not suffix_desc else f"{args.script}_{suffix_desc}"
+        else:
+            name = f"{args.script}_batch_{batch_idx}"
 
         # Prepare the vars that go into Jinja
         template_vars = {
             "pykernel": pykernel,
             "pre_command": pre_command,
             "script_path": str(script_path),
-            "script_args": combo_dict,
+            "command_suffixes": command_suffixes,
+            "script_args": {}, # Backwards compatibility if needed
         }
 
         # Add mode specific arguments
         template_vars.update(
             {k: v for k, v in mode_specific_overrides.items() if v is not None}
         )
-
-        # instantiate and submit
-        suffix = "_".join(
-            f"{arg_to_string(k)}={arg_to_string(v)}" for k, v in combo_dict.items()
-        )
-        name = args.script if not suffix else f"{args.script}_{suffix}"
 
         job = JOB_OPTIONS[args.mode](
             cmd_template=template_fp, job_name=name, template_vars=template_vars

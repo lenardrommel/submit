@@ -1,1 +1,3 @@
-{{ pykernel }} {{ script_path }} {% for k, v in script_args.items() %}{% if v is sameas true %} --{{ k }}{% else %} --{{ k }} {{ v }}{% endif %}{% endfor %}
+{% for suffix in command_suffixes %}
+{{ pykernel }} {{ script_path }} {{ suffix }}
+{% endfor %}

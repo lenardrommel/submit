@@ -193,19 +193,28 @@ Run a SLURM job with custom parameters:
 python submit.py --mode slurm --script my_script --partition gpu --cpus-per-task 4 --mem-per-cpu 4G
 ```
 
+### Batched Execution
+
+To group runs sequentially and reduce the number of individual jobs queued on the cluster, the `submit.py` script supports multi-dimensional batching. You can pool multiple execution configurations into a single SLURM job submission.
+
+To prevent collision with any `--batch_size` arguments parsed by your underlying Python scripts, `submit` looks for `batch_size` nested under specific parameter dictionaries:
+
+```yaml
+scripts:
+  my_script:
+    path: "path/to/script.py"
+    default_args:
+      # Outer parameter combinations (span new #SBATCH jobs)
+      param1: ["value1", "value2", "value3"]
+      batch_size: 32  # This is cleanly passed to python script args
+
+      # Inner parameter combinations (batched sequentially inside a single #SBATCH job)
+      param2: 
+        values: [0, 1]
+        batch_size: 3   # submit 3 sequential evaluations per 1 SLURM sbatch command
+```
+This reduces the number of queued jobs and runs them iteratively on the provisioned SLURM node. `submit` handles computing the cartesian product across all parameters whilst correctly chunking and appending executions iteratively to the `sbatch` templates.
+
 ### Contributing
 
 If you think features are missing or issues occur, please reach out.
-
-
-                                                                                                                                                                   
-  # Run with the 1D test config                                                                                                                                    
-  python submit/submit.py --mode slurm --script fit_prior_1d --config_file submit/run_fit_1d_test.yaml                                                             
-                                                                                                                                                                   
-  # Run with the 2D config                                                                                                                                         
-  python submit/submit.py --mode slurm --script fit_prior --config_file submit/run_fit_conda.yaml                                                                  
-                                                                                                                                                                   
-  # Override parameters on the command line                                                                                                                        
-  python submit/submit.py --mode slurm --script fit_prior --config_file submit/run_fit_conda.yaml --data_name pos_2 --max_iter 40 --num_samples 40                 
-#spatial_kernel_expr: ['m12 + m32 + m52 + m72 + rq', "m12 + m32 + m52 + m72 + rq + rq + rq", "m12 + m32 + m32 + m32"]
-      #function_kernel_expr: ["h1 + sm32 + sm32 + sm32", "h1 + sm32 + sm52 + sm72 + sm72", "h1 + sm12 + sm52 + sm72 + sqr + sqr", "h1 + sqr + sqr + sqr"]
