@@ -245,7 +245,8 @@ def main() -> None:
 
     # Grab the right mode-block
     mode_cfg = config["mode"][args.mode.value]
-    pykernel = mode_cfg["pykernel"]
+    pykernel = mode_cfg.get("pykernel", "")
+    pre_command = mode_cfg.get("pre_command", "")
     template_fp = Path(mode_cfg["template"])
 
     # Grab the selected script-block
@@ -296,6 +297,7 @@ def main() -> None:
         # Prepare the vars that go into Jinja
         template_vars = {
             "pykernel": pykernel,
+            "pre_command": pre_command,
             "script_path": str(script_path),
             "script_args": combo_dict,
         }

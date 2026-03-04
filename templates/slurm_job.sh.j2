@@ -16,4 +16,12 @@ export CACHEDIR=$WORK/cache
 
 echo {{script_path}}
 
+{% if pre_command %}
+{{ pre_command }}
+{% endif %}
+
+{% if pykernel %}
 {{ pykernel }} 'python {{ script_path}}{% for k,v in script_args.items() %}{% if v is sameas true %} --{{k}}{% else %} --{{k}} {{v}}{% endif %} {% endfor %}'
+{% else %}
+python {{ script_path}}{% for k,v in script_args.items() %}{% if v is sameas true %} --{{k}}{% else %} --{{k}} {{v}}{% endif %} {% endfor %}
+{% endif %}

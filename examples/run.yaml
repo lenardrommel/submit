@@ -2,6 +2,17 @@ mode:
   slurm: 
     pykernel: "singularity exec --bind /mnt:/mnt --nv python.sif bash -c"
     template: "./submit/templates/slurm_job.sh.j2"
+    
+  # Example configuration for SLURM using Conda instead of Singularity
+  # slurm_conda:
+  #   # Optional: commands to run before the python script, e.g., to activate conda
+  #   pre_command: |
+  #     eval "$(conda shell.bash hook)"
+  #     conda activate myenv
+  #   # pykernel can be empty when using conda (we execute `python` directly)
+  #   pykernel: ""
+  #   template: "./submit/templates/slurm_job.sh.j2"
+
   cloud_local: 
     pykernel: "singularity exec --bind /mnt:/mnt --nv python.sif bash -c"
     template: "./submit/templates/cloud_local_job_cmd.j2"
