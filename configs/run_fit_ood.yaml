@@ -7,11 +7,11 @@ mode:
       conda activate nosplace-py311
 
 scripts:
-  fit_prior:
+  fit_prior_ood:
     path: "./luno_experiments/scripts/fit.py"
     default_args:
       data_name: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
       max_iter: 40
       num_samples: 40
-      spatial_kernel_expr: ["'m12 + m32 + m52 + m72 + rq'", "'m12 + m32 + m52 + m72 + rq'", "'m12 + m32 + m52 + m72 + rq + rq + rq'", "'m12 + m32 + m32 + m32'"]
+      spatial_kernel_expr: ["'m12 + m32 + m52 + m72 + rq'", "'m12 + m32 + m52 + m72 + rq + rq + rq'", "'m12 + m32 + m32 + m32'"]
       function_kernel_expr: ["'h1 + sm32 + sm32 + sm32'", "'h1 + sm32 + sm52 + sm72 + sm72'", "'h1 + sm12 + sm52 + sm72 + sqr + sqr'", "'h1 + sqr + sqr + sqr'" ]

@@ -1,0 +1,36 @@
+mode:
+  slurm:
+    template: "./submit/templates/slurm_job.sh.j2"
+    pykernel: ""
+    pre_command: |
+      eval "$(conda shell.bash hook)"
+      conda activate nosplace-py311
+
+scripts:
+  evaluate_fsp:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      method: "fsp_la"
+      data_name: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1", "diff_hyp_diff_1", "diff_burgers_1"]
+      model_seed: [0, 1, 2, 3]
+      seed: [0]
+      prior_name: ["'c28ad71f'", "'d48291a7'", "'0837b60f'", "'281d74e8'", "'8795269a'"]
+      context_strategy: "gp"
+      context_kernel: ["m32", "m52", "rbf"]
+      num_context_points: 6
+      context_resolution: [1, 2, 4, 8]
+
+  ggn_luno:
+    path: "./luno_experiments/scripts/ggn.py"
+    default_args:
+      data_name: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1", "diff_hyp_diff_1", "diff_burgers_1"]
+      model_seed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+  evaluate_luno:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      method: "luno_la"
+      data_name: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1", "diff_hyp_diff_1", "diff_burgers_1"]
+      model_seed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      seed: [0]
+      low_rank_name: "low_rank_terms.pkl"
