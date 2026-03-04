@@ -197,21 +197,18 @@ python submit.py --mode slurm --script my_script --partition gpu --cpus-per-task
 
 To group runs sequentially and reduce the number of individual jobs queued on the cluster, the `submit.py` script supports multi-dimensional batching. You can pool multiple execution configurations into a single SLURM job submission.
 
-To prevent collision with any `--batch_size` arguments parsed by your underlying Python scripts, `submit` looks for `batch_size` nested under specific parameter dictionaries:
+To prevent collision with any `--batch_size` arguments parsed by your underlying Python scripts, use the `slurm_batch_size` argument in your configuration:
 
 ```yaml
 scripts:
   my_script:
     path: "path/to/script.py"
     default_args:
-      # Outer parameter combinations (span new #SBATCH jobs)
       param1: ["value1", "value2", "value3"]
       batch_size: 32  # This is cleanly passed to python script args
 
-      # Inner parameter combinations (batched sequentially inside a single #SBATCH job)
-      param2: 
-        values: [0, 1]
-        batch_size: 3   # submit 3 sequential evaluations per 1 SLURM sbatch command
+      # Group parameter combos sequentially inside a single #SBATCH job
+      slurm_batch_size: 3   # submit 3 sequential evaluations per 1 SLURM sbatch command
 ```
 This reduces the number of queued jobs and runs them iteratively on the provisioned SLURM node. `submit` handles computing the cartesian product across all parameters whilst correctly chunking and appending executions iteratively to the `sbatch` templates.
 

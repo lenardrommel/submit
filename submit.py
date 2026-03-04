@@ -255,22 +255,12 @@ def main() -> None:
     default_args = script_cfg.get("default_args", {})
 
     # Combine variables to create job arrays
-    extra_args = {}
-    batch_sizes = {}
+    extra_args = {k: v if isinstance(v, list) else [v] for k, v in default_args.items()}
     
-    for k, v in default_args.items():
-        if isinstance(v, dict) and "values" in v:
-            vals = v["values"]
-            extra_args[k] = vals if isinstance(vals, list) else [vals]
-            if "batch_size" in v:
-                try:
-                    bz = int(v["batch_size"])
-                    if bz > 0:
-                        batch_sizes[k] = bz
-                except (ValueError, TypeError):
-                    pass
-        else:
-            extra_args[k] = v if isinstance(v, list) else [v]
+    # Extract slurm_batch_size if specified and remove from script arguments
+    slurm_batch_size = extra_args.pop("slurm_batch_size", [1])[0]
+    if not isinstance(slurm_batch_size, int) or slurm_batch_size < 1:
+        slurm_batch_size = 1
     i = 0
     while i < len(unknown):
         tok = unknown[i]
@@ -290,40 +280,31 @@ def main() -> None:
             extra_args[key] = vals
 
     keys = list(extra_args.keys())
-    
-    # Build list of chunks for each parameter
-    param_chunks = []
-    total_commands = 1
-    for k in keys:
-        vals = extra_args[k]
-        total_commands *= len(vals)
-        sz = batch_sizes.get(k, 1) # Default batch size is 1
-        # Create chunks for this parameter
-        chunks = [vals[i:i + sz] for i in range(0, len(vals), sz)]
-        param_chunks.append(chunks)
-
-    # Each combination of chunks corresponds to one Job
-    job_chunk_combos = list(product(*param_chunks))
-    total_jobs = len(job_chunk_combos)
+    all_values = [extra_args[k] for k in keys]
 
     # Show job creation details
-    print(f"Creating {total_jobs} job(s) for {total_commands} commands with the following parameters:")
+    total_commands = len(list(product(*all_values)))
+    total_jobs = (total_commands + slurm_batch_size - 1) // slurm_batch_size
+    print(f"Creating {total_jobs} job(s) for {total_commands} commands with the following parameters (batch size: {slurm_batch_size}):")
     if keys:
         for key, values in extra_args.items():
             values_str = ", ".join(str(v) for v in values)
-            bz_str = f" (batch size: {batch_sizes[key]})" if key in batch_sizes else ""
-            print(f"  {key}: [{values_str}]{bz_str}")
+            print(f"  {key}: [{values_str}]")
         print()
     else:
         print("  (no parameters specified)")
         print()
 
     # Create sequential command arrays for batch execution
-    for batch_idx, chunk_combo in enumerate(job_chunk_combos):
+    all_combinations = list(product(*all_values))
+    
+    for batch_idx in range(total_jobs):
+        start_idx = batch_idx * slurm_batch_size
+        batch_combos = all_combinations[start_idx:start_idx + slurm_batch_size]
+        
         command_suffixes = []
-        # Cartesian product of the chunks to get all commands for this job
-        for val_combo in product(*chunk_combo):
-            combo_dict = dict(zip(keys, val_combo))
+        for combo in batch_combos:
+            combo_dict = dict(zip(keys, combo))
             suffix = " ".join(
                 f"--{k}" if v is True else f"--{k} {v}" 
                 for k, v in combo_dict.items()
@@ -331,11 +312,10 @@ def main() -> None:
             command_suffixes.append(suffix)
             
         # Determine job name
-        if len(command_suffixes) == 1:
-            val_combo = list(product(*chunk_combo))[0]
-            combo_dict = dict(zip(keys, val_combo))
+        if slurm_batch_size == 1:
+            first_combo_dict = dict(zip(keys, batch_combos[0]))
             suffix_desc = "_".join(
-                f"{arg_to_string(k)}={arg_to_string(v)}" for k, v in combo_dict.items()
+                f"{arg_to_string(k)}={arg_to_string(v)}" for k, v in first_combo_dict.items()
             )
             name = args.script if not suffix_desc else f"{args.script}_{suffix_desc}"
         else:
