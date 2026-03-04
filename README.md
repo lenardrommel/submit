@@ -86,7 +86,8 @@ My current workflow is as follows:
 ```bash
 cp -rf ./submit/examples/* ./submit/examples/
 ```
-3. I prefer running jobs on the ML Cloud using a singularity container (cf. https://portal.mlcloud.uni-tuebingen.de/user-guide/tutorials/singularity/). To do so, copy and modify the `submit/Singularity.def` file in your working repository. Then, start an interactive session (using e.g. `srun ...`) and build the singularity container with the following command:
+3. **Container/Environment setup:**
+   - **Option A (Singularity):** I prefer running jobs on the ML Cloud using a singularity container (cf. https://portal.mlcloud.uni-tuebingen.de/user-guide/tutorials/singularity/). To do so, copy and modify the `submit/Singularity.def` file in your working repository. Then, start an interactive session (using e.g. `srun ...`) and build the singularity container with the following command:
 ```bash
 # Set cache and tmp directories for the Singularity build - (not optimal)
 export SINGULARITY_CACHEDIR="/scratch_local/$USER-$SLURM_JOBID"
@@ -95,6 +96,8 @@ export SINGULARITY_TMPDIR="/scratch_local/$USER-$SLURM_JOBID"
 # Build the singularity containers
 singularity build --fakeroot --force --bind /mnt:/mnt --nv python.sif submit/Singularity.def
 ```
+   - **Option B (Conda):** Alternatively, you can run jobs using a Conda environment. You don't need to build a container. Instead, you will use the `pre_command` setting in `run.yaml` (in the next step) to activate your Conda environment before running the python script, and leave `pykernel` empty.
+
 4. Next, open and modify the `submit/run.yaml` file in the main `submit` directory. It is important to change the entries below scripts, `regression...` to the scripts you want to run and have in the repo. (Note: `default_args` is optional, so in most cases this section can be removed).
 5. From the working repository, run jobs with the following command structure:
 ```bash
@@ -130,7 +133,15 @@ mode:
     pykernel: "python3"
     template: "templates/local.sh"
   slurm:
-    pykernel: "python3"
+    pykernel: "singularity exec --bind /mnt:/mnt --nv python.sif bash -c"
+    template: "templates/slurm.sh"
+  slurm_conda:
+    # Optional: commands to run before the python script, e.g., to activate conda
+    pre_command: |
+      eval "$(conda shell.bash hook)"
+      conda activate myenv
+    # pykernel can be empty when using conda (we execute `python` directly)
+    pykernel: ""
     template: "templates/slurm.sh"
 
 scripts:
@@ -185,3 +196,16 @@ python submit.py --mode slurm --script my_script --partition gpu --cpus-per-task
 ### Contributing
 
 If you think features are missing or issues occur, please reach out.
+
+
+                                                                                                                                                                   
+  # Run with the 1D test config                                                                                                                                    
+  python submit/submit.py --mode slurm --script fit_prior_1d --config_file submit/run_fit_1d_test.yaml                                                             
+                                                                                                                                                                   
+  # Run with the 2D config                                                                                                                                         
+  python submit/submit.py --mode slurm --script fit_prior --config_file submit/run_fit_conda.yaml                                                                  
+                                                                                                                                                                   
+  # Override parameters on the command line                                                                                                                        
+  python submit/submit.py --mode slurm --script fit_prior --config_file submit/run_fit_conda.yaml --data_name pos_2 --max_iter 40 --num_samples 40                 
+#spatial_kernel_expr: ['m12 + m32 + m52 + m72 + rq', "m12 + m32 + m52 + m72 + rq + rq + rq", "m12 + m32 + m32 + m32"]
+      #function_kernel_expr: ["h1 + sm32 + sm32 + sm32", "h1 + sm32 + sm52 + sm72 + sm72", "h1 + sm12 + sm52 + sm72 + sqr + sqr", "h1 + sqr + sqr + sqr"]
