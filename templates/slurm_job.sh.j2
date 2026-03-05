@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name={{ job_name }}
-#SBATCH --partition={{ partition  | default("2080-galvani") }}
+#SBATCH --partition={{ partition  | default("a100-galvani") }}
 #SBATCH --nodes={{ nodes          | default(1)            }}
 #SBATCH --ntasks={{ ntasks        | default(1)            }}
 #SBATCH --cpus-per-task={{ cpus_per_task | default(12)     }}
-#SBATCH --mem-per-cpu={{ mem_per_cpu  | default("4G")       }}
+#SBATCH --mem-per-cpu={{ mem_per_cpu  | default("48G")       }}
 #SBATCH --gres={{ gres             | default("gpu:1")     }}
 #SBATCH --time={{ time_limit      | default("3-00:00:00")}}
 #SBATCH --output={{ slurm_log_dir  | default("logs") }}/%x_%j.out
