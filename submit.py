@@ -255,12 +255,25 @@ def main() -> None:
     default_args = script_cfg.get("default_args", {})
 
     # Combine variables to create job arrays
-    extra_args = {k: v if isinstance(v, list) else [v] for k, v in default_args.items()}
+    extra_args = {}
+    iter_multiplier = 1
     
+    for k, v in default_args.items():
+        if isinstance(v, dict) and "values" in v:
+            vals = v["values"]
+            vals_list = vals if isinstance(vals, list) else [vals]
+            extra_args[k] = vals_list
+            if v.get("iter") is True:
+                iter_multiplier *= len(vals_list)
+        else:
+            extra_args[k] = v if isinstance(v, list) else [v]
+            
     # Extract slurm_batch_size if specified and remove from script arguments
     slurm_batch_size = extra_args.pop("slurm_batch_size", [1])[0]
     if not isinstance(slurm_batch_size, int) or slurm_batch_size < 1:
         slurm_batch_size = 1
+        
+    slurm_batch_size *= iter_multiplier
     i = 0
     while i < len(unknown):
         tok = unknown[i]

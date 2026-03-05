@@ -210,6 +210,18 @@ scripts:
       # Group parameter combos sequentially inside a single #SBATCH job
       slurm_batch_size: 3   # submit 3 sequential evaluations per 1 SLURM sbatch command
 ```
+
+Alternatively, if you want to automatically batch executions across the entire length of specific parameter arrays (e.g. iterating seeds together under a single job instead of submitting N jobs), you can use the `iter: True` syntax:
+
+```yaml
+scripts:
+  my_script:
+    default_args:
+      param1: 
+        values: ["value1", "value2", "value3"]
+        iter: True   # Automatically multiplies slurm_batch_size by the array length (3)
+```
+
 This reduces the number of queued jobs and runs them iteratively on the provisioned SLURM node. `submit` handles computing the cartesian product across all parameters whilst correctly chunking and appending executions iteratively to the `sbatch` templates.
 
 ### Contributing
