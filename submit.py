@@ -12,6 +12,12 @@ from typing import Union
 import yaml
 from jinja2 import Template
 
+from luno_experiments.fsp.prior_discovery import (
+    format_prior_table,
+    list_available_priors,
+    validate_prior,
+)
+
 
 class ExecutionMode(Enum):
     """Enumeration of supported job execution modes."""
@@ -176,6 +182,76 @@ def arg_to_string(val):
     return str(val).replace("/", "-")
 
 
+def _handle_list_priors(data_names: list[str]) -> None:
+    """Print available priors for each dataset and exit."""
+    for data_name in data_names:
+        priors = list_available_priors(data_name)
+        print(f"\nAvailable priors for '{data_name}':")
+        print(format_prior_table(priors))
+    print()
+
+
+def _resolve_auto_priors(
+    keys: list[str],
+    all_values: list[list],
+    extra_args: dict,
+) -> tuple[list[str], list[list]]:
+    """Replace ``prior_name=["auto"]`` with discovered hashes per data_name."""
+    if "prior_name" not in extra_args:
+        return keys, all_values
+    pn_vals = extra_args["prior_name"]
+    if not (len(pn_vals) == 1 and str(pn_vals[0]).strip("'\"") == "auto"):
+        return keys, all_values
+
+    data_names = extra_args["data_name"] if "data_name" in extra_args else []
+    all_hashes: set[str] = set()
+    for dn in data_names:
+        priors = list_available_priors(str(dn))
+        for p in priors:
+            all_hashes.add(p["hash"])
+
+    if not all_hashes:
+        print("WARNING: prior_name='auto' but no calibrated priors found on disk.")
+        return keys, all_values
+
+    sorted_hashes = sorted(all_hashes)
+    print(f"Auto-discovered {len(sorted_hashes)} prior(s): {', '.join(sorted_hashes)}")
+    pn_idx = keys.index("prior_name")
+    all_values[pn_idx] = [f"'{h}'" for h in sorted_hashes]
+    return keys, all_values
+
+
+def _validate_prior_combinations(
+    combinations: list[tuple],
+    keys: list[str],
+) -> list[tuple]:
+    """Drop combinations whose (data_name, prior_name) pair is invalid."""
+    if "prior_name" not in keys or "data_name" not in keys:
+        return combinations
+
+    pn_idx = keys.index("prior_name")
+    dn_idx = keys.index("data_name")
+
+    valid = []
+    warned: set[tuple[str, str]] = set()
+    for combo in combinations:
+        dn = str(combo[dn_idx])
+        pn = str(combo[pn_idx]).strip("'\"")
+        is_ok, _, err = validate_prior(dn, pn)
+        if is_ok:
+            valid.append(combo)
+        else:
+            pair = (dn, pn)
+            if pair not in warned:
+                warned.add(pair)
+                priors = list_available_priors(dn)
+                print(f"WARNING: {err}")
+                print(f"  Available priors for '{dn}':")
+                print(format_prior_table(priors))
+                print()
+    return valid
+
+
 def main() -> None:
     """Main entry point for job submission.
 
@@ -194,7 +270,7 @@ def main() -> None:
     parser.add_argument(
         "--script",
         type=str,
-        required=True,
+        default=None,
         help="Which entry under `scripts:` in the YAML to run.",
     )
 
@@ -218,9 +294,29 @@ def main() -> None:
         default="./logs",
         help="Log directory for slurm job.",
     )
+    parser.add_argument(
+        "--list-priors",
+        nargs="+",
+        metavar="DATA_NAME",
+        default=None,
+        help="List available priors for given dataset(s) and exit.",
+    )
+    parser.add_argument(
+        "--skip-prior-validation",
+        action="store_true",
+        default=False,
+        help="Skip prior_name validation against disk when submitting FSP jobs.",
+    )
 
     # Split off any --key value1 value2 ... into `unknown`
     args, unknown = parser.parse_known_args()
+
+    if args.list_priors is not None:
+        _handle_list_priors(args.list_priors)
+        return
+
+    if args.script is None:
+        parser.error("--script is required when not using --list-priors")
 
     # Convert mode string to enum
     args.mode = ExecutionMode.from_str(args.mode)
@@ -295,6 +391,8 @@ def main() -> None:
     keys = list(extra_args.keys())
     all_values = [extra_args[k] for k in keys]
 
+    keys, all_values = _resolve_auto_priors(keys, all_values, extra_args)
+
     # Show job creation details
     total_commands = len(list(product(*all_values)))
     total_jobs = (total_commands + slurm_batch_size - 1) // slurm_batch_size
@@ -310,6 +408,18 @@ def main() -> None:
 
     # Create sequential command arrays for batch execution
     all_combinations = list(product(*all_values))
+
+    if not args.skip_prior_validation and "prior_name" in keys:
+        pre_count = len(all_combinations)
+        all_combinations = _validate_prior_combinations(all_combinations, keys)
+        skipped = pre_count - len(all_combinations)
+        if skipped:
+            print(f"Skipped {skipped} combination(s) with invalid priors.\n")
+        if not all_combinations:
+            print("ERROR: No valid (data_name, prior_name) combinations remain.")
+            sys.exit(1)
+        total_commands = len(all_combinations)
+        total_jobs = (total_commands + slurm_batch_size - 1) // slurm_batch_size
     
     for batch_idx in range(total_jobs):
         start_idx = batch_idx * slurm_batch_size
