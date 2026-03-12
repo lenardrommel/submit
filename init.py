@@ -271,16 +271,36 @@ From: python:{python_version}
         config = {
             "mode": {
                 "slurm": {
-                    "pykernel": "singularity exec --bind /mnt:/mnt --nv python.sif bash -c",
                     "template": "./submit/templates/slurm_job.sh.j2",
+                    "runtime": "singularity",
                 },
                 "cloud_local": {
-                    "pykernel": "singularity exec --bind /mnt:/mnt --nv python.sif bash -c",
                     "template": "./submit/templates/cloud_local_job_cmd.j2",
+                    "runtime": "conda",
                 },
                 "local": {
-                    "pykernel": "python",
                     "template": "./submit/templates/local_job_cmd.j2",
+                    "runtime": "venv",
+                    "shell_executable": "bash",
+                },
+            },
+            "runtime": {
+                "venv": {
+                    "python_cmd": "./.venv/bin/python",
+                },
+                "conda": {
+                    "python_cmd": "python",
+                    "pre_command": (
+                        'eval "$(conda shell.bash hook)"\n'
+                        "conda activate myenv"
+                    ),
+                },
+                "singularity": {
+                    "python_cmd": "python",
+                    "command_wrapper": (
+                        "singularity exec --bind /mnt:/mnt --nv "
+                        "python.sif bash -lc"
+                    ),
                 },
             },
             "scripts": {},

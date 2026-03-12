@@ -1,0 +1,122 @@
+mode:
+  local:
+    template: "./submit/templates/local_job_cmd.j2"
+    runtime: "venv"
+    shell_executable: "bash"
+  cloud_local:
+    template: "./submit/templates/cloud_local_job_cmd.j2"
+    runtime: "conda"
+    shell_executable: "bash"
+  slurm:
+    template: "./submit/templates/slurm_job.sh.j2"
+    runtime: "singularity"
+
+runtime:
+  venv:
+    python_cmd: "./.venv/bin/python"
+  conda:
+    python_cmd: "python"
+    pre_command: |
+      eval "$(conda shell.bash hook)"
+      conda activate nosplace-py311
+  singularity:
+    python_cmd: "python"
+    command_wrapper: "singularity exec --bind /mnt:/mnt --nv python.sif bash -lc"
+
+scripts:
+  run_ggn:
+    path: "./luno_experiments/scripts/ggn.py"
+    default_args:
+      data_name:
+        values:
+          - "pos_2"
+          - "pos_neg_2"
+          - "pos_neg_flip_2"
+          - "base_2"
+          - "flip_2"
+          - "diff_diff_1"
+          - "diff_lin_1"
+          - "diff_ks_cons_1"
+          - "diff_hyp_diff_1"
+          - "diff_burgers_1"
+        iter: true
+      seed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+  run_evaluate_luno:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      data_name:
+        - "pos_2"
+        - "pos_neg_2"
+        - "pos_neg_flip_2"
+        - "base_2"
+        - "flip_2"
+        - "diff_diff_1"
+        - "diff_lin_1"
+        - "diff_ks_cons_1"
+        - "diff_hyp_diff_1"
+        - "diff_burgers_1"
+      method: ["luno_iso", "luno_la"]
+      batch_size: 32
+      calibration_mode: "adam"
+      seed: [0, 1, 2, 3]
+
+  run_evaluate_ensemble:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      data_name:
+        - "pos_2"
+        - "pos_neg_2"
+        - "pos_neg_flip_2"
+        - "base_2"
+        - "flip_2"
+        - "diff_diff_1"
+        - "diff_lin_1"
+        - "diff_ks_cons_1"
+        - "diff_hyp_diff_1"
+        - "diff_burgers_1"
+      method: ["ensemble"]
+      batch_size: 32
+      calibration_mode: "adam"
+      seed: [0, 1, 2, 3]
+      ensemble_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      run_tag: "ensemble"
+
+  run_evaluate_fsp:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      data_name: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1", "diff_hyp_diff_1", "diff_burgers_1"]
+      slurm_batch_size: 5
+      method: ["fsp_laplace"]
+      batch_size: 32
+      seed: [0, 1, 2, 3]
+      run_tag: "fsp"
+      prior_name: ["auto"]
+
+  run_evaluate_fsp_ood:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      data_name:
+        values: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+        iter: true
+      method: ["fsp_laplace"]
+      batch_size: 32
+      max_rank:
+        values: [5, 6, 7, 8]
+        iter: true
+      num_context_points:
+        values: [6, 7, 8, 10, 12, 16]
+        iter: true
+      seed: [0, 1, 2, 3]
+      prior_name:
+        values: ["auto"]
+        iter: true
+
+  run_evaluate_fsp_apebench:
+    path: "./luno_experiments/scripts/evaluate.py"
+    default_args:
+      data_name: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1", "diff_hyp_diff_1", "diff_burgers_1"]
+      method: ["fsp_laplace"]
+      batch_size: 32
+      seed: [0, 1, 2, 3]
+      prior_name: ["auto"]

@@ -1,0 +1,101 @@
+mode:
+  local:
+    template: "./submit/templates/local_job_cmd.j2"
+    runtime: "venv"
+    shell_executable: "bash"
+  cloud_local:
+    template: "./submit/templates/cloud_local_job_cmd.j2"
+    runtime: "conda"
+    shell_executable: "bash"
+  slurm:
+    template: "./submit/templates/slurm_job.sh.j2"
+    runtime: "conda"
+
+runtime:
+  venv:
+    python_cmd: "./.venv/bin/python"
+  conda:
+    python_cmd: "python"
+    pre_command: |
+      eval "$(conda shell.bash hook)"
+      conda activate nosplace-py311
+  singularity:
+    python_cmd: "python"
+    command_wrapper: "singularity exec --bind /mnt:/mnt --nv python.sif bash -lc"
+
+scripts:
+  fit_prior:
+    path: "./luno_experiments/scripts/fit.py"
+    default_args:
+      data_name:
+        values: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+        iter: true
+      max_iter: 100
+      num_samples: 1000
+      spatial_kernel_expr:
+        values:
+          - "'m12 + m32 + m52 + m72 + rq'"
+          - "'m12 + m32 + m52 + m72 + rq'"
+          - "'m12 + m32 + m52 + m72 + rq + rq + rq'"
+          - "'m12 + m32 + m32 + m32'"
+        iter: true
+      function_kernel_expr:
+        values:
+          - "'h1 + sm32 + sm32 + sm32'"
+          - "'h1 + sm32 + sm52 + sm72 + sm72'"
+          - "'h1 + sm12 + sm52 + sm72 + sqr + sqr'"
+          - "'h1 + sqr + sqr + sqr'"
+        iter: true
+
+  fit_prior_apebench:
+    path: "./luno_experiments/scripts/fit.py"
+    default_args:
+      data_name:
+        values: ["diff_diff_1", "diff_lin_1", "diff_ks_cons_1"]
+        iter: true
+      max_iter: 40
+      num_samples: 40
+      spatial_kernel_expr:
+        values:
+          - "'m12 + m32 + m52 + m72 + rq'"
+          # - "'m12 + m32 + m52 + m72 + rq'"
+          # - "'m12 + m32 + m52 + m72 + rq + rq + rq'"
+          # - "'m12 + m32 + m32 + m32'"
+        iter: true
+      function_kernel_expr:
+        values:
+          - "'h1 + sm32 + sm32 + sm32'"
+          # - "'h1 + sm32 + sm52 + sm72 + sm72'"
+          # - "'h1 + sm12 + sm52 + sm72 + sqr + sqr'"
+          # - "'h1 + sqr + sqr + sqr'"
+        iter: true
+
+  fit_prior_unsmooth:
+    path: "./luno_experiments/scripts/fit.py"
+    default_args:
+      data_name: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+      max_iter: 40
+      num_samples: 40
+      spatial_kernel_expr: ["'m12 + m12'"]
+      function_kernel_expr: ["'h1 + sm12 + sm12 + sm32'"]
+      prior_name: "unsmooth"
+
+  fit_prior_mid_smooth:
+    path: "./luno_experiments/scripts/fit.py"
+    default_args:
+      data_name: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+      max_iter: 40
+      num_samples: 40
+      spatial_kernel_expr: ["'m32 + m32'"]
+      function_kernel_expr: ["'h1 + sm32 + sm32 + sm32'"]
+      prior_name: "mid_smooth"
+
+  fit_prior_high_smooth:
+    path: "./luno_experiments/scripts/fit.py"
+    default_args:
+      data_name: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+      max_iter: 40
+      num_samples: 40
+      spatial_kernel_expr: ["'rbf + rbf'"]
+      function_kernel_expr: ["'h1 + srbf + srbf + srbf'"]
+      prior_name: "smooth"

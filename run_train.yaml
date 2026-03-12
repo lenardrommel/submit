@@ -1,0 +1,99 @@
+mode:
+  local:
+    template: "./submit/templates/local_job_cmd.j2"
+    runtime: "venv"
+    shell_executable: "bash"
+  cloud_local:
+    template: "./submit/templates/cloud_local_job_cmd.j2"
+    runtime: "conda"
+    shell_executable: "bash"
+  slurm:
+    template: "./submit/templates/slurm_job.sh.j2"
+    runtime: "singularity"
+
+runtime:
+  venv:
+    python_cmd: "./.venv/bin/python"
+  conda:
+    python_cmd: "python"
+    pre_command: |
+      eval "$(conda shell.bash hook)"
+      conda activate nosplace-py311
+  singularity:
+    python_cmd: "python"
+    command_wrapper: "singularity exec --bind /mnt:/mnt --nv python.sif bash -lc"
+
+scripts:
+  train_luno:
+    path: "./luno_experiments/scripts/train.py"
+    default_args:
+      mode: "luno"
+      data_name:
+        values:
+          - "pos_2"
+          - "pos_neg_2"
+          - "pos_neg_flip_2"
+          - "base_2"
+          - "flip_2"
+          - "diff_diff_1"
+          - "diff_lin_1"
+          - "diff_ks_cons_1"
+          - "diff_hyp_diff_1"
+          - "diff_burgers_1"
+        iter: true
+      seed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      num_train_samples:
+        values: [100, 1000]
+        iter: true
+      batch_size: 32
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      num_epochs: 1000
+
+  train_fsp:
+    path: "./luno_experiments/scripts/train.py"
+    default_args:
+      mode: "fsp"
+      data_name:
+        values: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
+        iter: true
+      seed: [0, 1, 2, 3]
+      num_train_samples:
+        values: [1000, 100]
+        iter: true
+      batch_size: 32
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      noise_scale: [1e-4, 1e-4, 1e-6]
+      num_epochs: 1000
+      num_spatial_subsample: 1
+      context_strategy: "gp"
+      prior_name:
+        values: ["auto"]
+        iter: true
+
+  train_fsp_apebench:
+    path: "./luno_experiments/scripts/train.py"
+    default_args:
+      mode: "fsp"
+      data_name:
+        values:
+          - "diff_diff_1"
+          - "diff_lin_1"
+          - "diff_ks_cons_1"
+          - "diff_hyp_diff_1"
+          - "diff_burgers_1"
+        iter: true
+      seed: [0, 1, 2, 3]
+      num_train_samples: 100
+      batch_size: 32
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      num_epochs: 1000
+      context_strategy: "gp"
+      context_kernel: "m32"
+      grid_stride: 1
+      prior_name:
+        values: ["auto"]
+        iter: true
+      wandb: true

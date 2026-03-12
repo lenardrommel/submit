@@ -1,3 +1,14 @@
-{% for suffix in command_suffixes %}
-{{ pykernel }} {{ script_path }} {{ suffix }}
-{% endfor %}
+{% if pre_command -%}
+{{ pre_command }}
+{% endif -%}
+{% if working_directory -%}
+cd {{ working_directory }}
+export PYTHONPATH="{{ working_directory }}${PYTHONPATH:+:$PYTHONPATH}"
+{% endif -%}
+{% for suffix in command_suffixes -%}
+{% if command_wrapper -%}
+{{ command_wrapper }} "{{ python_cmd }} {{ script_path }} {{ suffix }}"
+{% else -%}
+{{ python_cmd }} {{ script_path }} {{ suffix }}
+{% endif -%}
+{% endfor -%}

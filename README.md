@@ -96,7 +96,7 @@ export SINGULARITY_TMPDIR="/scratch_local/$USER-$SLURM_JOBID"
 # Build the singularity containers
 singularity build --fakeroot --force --bind /mnt:/mnt --nv python.sif submit/Singularity.def
 ```
-   - **Option B (Conda):** Alternatively, you can run jobs using a Conda environment. You don't need to build a container. Instead, you will use the `pre_command` setting in `run.yaml` (in the next step) to activate your Conda environment before running the python script, and leave `pykernel` empty.
+   - **Option B (Conda):** Alternatively, you can run jobs using a Conda environment. You don't need to build a container. Instead, define a `runtime` entry with `python_cmd: "python"` and a `pre_command` that activates your Conda environment before the script runs.
 
 4. Next, open and modify the `submit/run.yaml` file in the main `submit` directory. It is important to change the entries below scripts, `regression...` to the scripts you want to run and have in the repo. (Note: `default_args` is optional, so in most cases this section can be removed).
 5. From the working repository, run jobs with the following command structure:
@@ -120,8 +120,8 @@ Remarks:
 ## Configuration
 
 The tool uses a YAML configuration file (`run.yaml`) to define:
-- Execution modes (local/SLURM)
-- Python kernel settings
+- Execution modes (`local`, `cloud_local`, `slurm`)
+- Runtime definitions (`venv`, Conda, Singularity, or plain Python)
 - Template paths
 - Script configurations
 - Default arguments
@@ -130,19 +130,28 @@ Example configuration structure:
 ```yaml
 mode:
   local:
-    pykernel: "python3"
-    template: "templates/local.sh"
+    template: "./submit/templates/local_job_cmd.j2"
+    runtime: "venv"
+    shell_executable: "bash"
+  cloud_local:
+    template: "./submit/templates/cloud_local_job_cmd.j2"
+    runtime: "conda"
+    shell_executable: "bash"
   slurm:
-    pykernel: "singularity exec --bind /mnt:/mnt --nv python.sif bash -c"
-    template: "templates/slurm.sh"
-  slurm_conda:
-    # Optional: commands to run before the python script, e.g., to activate conda
+    template: "./submit/templates/slurm_job.sh.j2"
+    runtime: "singularity"
+
+runtime:
+  venv:
+    python_cmd: "./.venv/bin/python"
+  conda:
+    python_cmd: "python"
     pre_command: |
       eval "$(conda shell.bash hook)"
       conda activate myenv
-    # pykernel can be empty when using conda (we execute `python` directly)
-    pykernel: ""
-    template: "templates/slurm.sh"
+  singularity:
+    python_cmd: "python"
+    command_wrapper: "singularity exec --bind /mnt:/mnt --nv python.sif bash -lc"
 
 scripts:
   my_script:
@@ -158,7 +167,7 @@ Default is to create such a `run.yaml` file in the main `submit` directory.
 
 Basic usage:
 ```bash
-python submit.py --mode [local|cloud_local|slurm] --script <script_name> [--slurm_args <slurm_args>] [--script_args <script_args>]
+python submit/submit.py --mode [local|cloud_local|slurm] --runtime <runtime_name> --script <script_name> [--slurm_args <slurm_args>] [--script_args <script_args>]
 ```
 
 ### Command Line Arguments
@@ -169,6 +178,7 @@ Required arguments:
 
 Optional arguments:
 - `--mode`: Execution mode (local or slurm, default: local)
+- `--runtime`: Runtime name from the YAML `runtime:` section. If omitted, `mode.<name>.runtime` is used.
 
 SLURM-specific arguments:
 - `--partition`: SLURM partition
@@ -185,12 +195,12 @@ Additional arguments:
 
 Run a local job with default parameters:
 ```bash
-python submit.py --mode local --script my_script
+python submit/submit.py --mode local --script my_script
 ```
 
 Run a SLURM job with custom parameters:
 ```bash
-python submit.py --mode slurm --script my_script --partition gpu --cpus-per-task 4 --mem-per-cpu 4G
+python submit/submit.py --mode slurm --script my_script --partition gpu --cpus-per-task 4 --mem-per-cpu 4G
 ```
 
 ### Batched Execution
@@ -211,18 +221,39 @@ scripts:
       slurm_batch_size: 3   # submit 3 sequential evaluations per 1 SLURM sbatch command
 ```
 
-Alternatively, if you want to automatically batch executions across the entire length of specific parameter arrays (e.g. iterating seeds together under a single job instead of submitting N jobs), you can use the `iter: True` syntax:
+If you want specific parameter dimensions to vary within one logical job, mark them with `iter: true`:
 
 ```yaml
 scripts:
   my_script:
     default_args:
-      param1: 
+      param1:
         values: ["value1", "value2", "value3"]
-        iter: True   # Automatically multiplies slurm_batch_size by the array length (3)
+        iter: true
+      seed: [0, 1, 2]
 ```
 
-This reduces the number of queued jobs and runs them iteratively on the provisioned SLURM node. `submit` handles computing the cartesian product across all parameters whilst correctly chunking and appending executions iteratively to the `sbatch` templates.
+With that configuration, `submit` creates three logical jobs, one per `seed`, and
+each logical job runs the three `param1` values sequentially. If
+`slurm_batch_size` is also set, it batches whole logical jobs on top of that.
+
+### Auto-Discovering FSP Priors
+
+When submitting FSP jobs, you can let `submit` read calibrated prior hashes from
+`models/gp/d=<data_name>_gp_prior/prior_registry.json` and the on-disk prior
+folders automatically:
+
+```yaml
+scripts:
+  train_fsp:
+    default_args:
+      data_name: ["pos_2", "base_2"]
+      prior_name: ["auto"]
+```
+
+`submit` resolves `["auto"]` separately for each `data_name`, only creates valid
+`(data_name, prior_name)` combinations, and passes hashes to the Python script
+in quoted form such as `--prior_name 'a74704d4'`.
 
 ### Contributing
 
