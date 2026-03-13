@@ -19,7 +19,10 @@ Features include:
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime
+import difflib
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -63,6 +66,7 @@ SLURM_RESOURCE_LABELS = {
     "time_limit": "--time",
     "slurm_log_dir": "--slurm_log_dir",
 }
+SUBMIT_INTERNAL_ARGUMENTS = {"slurm_batch_size"}
 
 
 class ExecutionMode(Enum):
@@ -187,7 +191,9 @@ class SlurmJob:
             if isinstance(self._template, Path)
             else self._template
         )
-        return Template(tpl).render(job_name=self._job_name, **self._vars)
+        render_vars = dict(self._vars)
+        render_vars.setdefault("job_name", self._job_name)
+        return Template(tpl).render(**render_vars)
 
     def submit(self) -> None:
         """Submit the rendered script to SLURM via ``sbatch``."""
@@ -226,6 +232,19 @@ class SlurmJob:
             )
         if result.stdout.strip():
             print(result.stdout.strip())
+            status_dir = self._vars.get("status_dir")
+            match = re.search(r"Submitted batch job (\d+)", result.stdout)
+            if status_dir and match is not None:
+                job_id = match.group(1)
+                status_path = f"{status_dir}/{self._job_name}_{job_id}.status"
+                print(
+                    "Progress status file: "
+                    f"{status_path}"
+                )
+                print(
+                    "Check progress with: "
+                    f"python submit/submit.py --show-status {status_path}"
+                )
         script_fp.unlink()
 
 
@@ -320,6 +339,213 @@ def _resolve_slurm_resource_settings(
     if partition_alias is not None:
         resources["partition"] = partition_alias[1]
     return resources, matched_profile, partition_alias
+
+
+def _resolve_status_dir(path_value: str) -> str:
+    """Resolve a status/log directory to an absolute path."""
+    raw_path = Path(path_value).expanduser()
+    if raw_path.is_absolute():
+        return str(raw_path)
+    return str((Path.cwd() / raw_path).resolve())
+
+
+def _parse_status_file(status_file: Path) -> dict[str, str]:
+    """Parse a simple ``key=value`` status file."""
+    status: dict[str, str] = {}
+    for line in status_file.read_text().splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        status[key.strip()] = value.strip()
+    return status
+
+
+def _iter_status_files(targets: list[str]) -> list[Path]:
+    """Expand file and directory targets into concrete ``.status`` files."""
+    status_files: list[Path] = []
+    for target in targets:
+        path = Path(target).expanduser()
+        if path.is_dir():
+            status_files.extend(sorted(path.glob("*.status")))
+        else:
+            status_files.append(path)
+    return status_files
+
+
+def _show_status(status_targets: list[str], parser: argparse.ArgumentParser) -> None:
+    """Print progress summaries for one or more status files and exit."""
+    status_files = _iter_status_files(status_targets)
+    if not status_files:
+        parser.error(
+            "No status files found. Pass one or more .status files or a directory "
+            "containing them."
+        )
+
+    missing_files = [status_file for status_file in status_files if not status_file.exists()]
+    if missing_files:
+        missing = ", ".join(str(path) for path in missing_files)
+        parser.error(f"Status file(s) not found: {missing}")
+
+    for idx, status_file in enumerate(status_files):
+        status = _parse_status_file(status_file)
+        state = status.get("state", "unknown")
+        current = status.get("current", "?")
+        total = status.get("total", "?")
+        updated_at = status.get("updated_at", "unknown")
+        job_name = status.get("job_name", status_file.stem)
+        job_id = status.get("job_id", "unknown")
+        current_command = status.get("current_command", "")
+
+        print(
+            f"{status_file.resolve()}: "
+            f"job={job_name} job_id={job_id} state={state} "
+            f"progress={current}/{total} updated_at={updated_at}"
+        )
+        if current_command:
+            print(f"  current_command: {current_command}")
+        if idx != len(status_files) - 1:
+            print()
+
+
+def _extract_script_argument_names(script_path: Path) -> set[str]:
+    """Collect supported long-form CLI argument names from ``argparse`` calls."""
+    try:
+        tree = ast.parse(script_path.read_text(), filename=str(script_path))
+    except SyntaxError as err:
+        raise ValueError(
+            f"Could not parse script '{script_path}' for argument validation: {err.msg}"
+        ) from err
+
+    argument_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "add_argument":
+            continue
+        for arg in node.args:
+            if (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value.startswith("--")
+            ):
+                argument_names.add(arg.value[2:])
+
+    return argument_names
+
+
+def _extract_script_argument_defaults(script_path: Path) -> dict[str, Any]:
+    """Collect simple ``argparse`` defaults keyed by argument destination name."""
+    try:
+        tree = ast.parse(script_path.read_text(), filename=str(script_path))
+    except SyntaxError as err:
+        raise ValueError(
+            f"Could not parse script '{script_path}' for argument validation: {err.msg}"
+        ) from err
+
+    defaults: dict[str, Any] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "add_argument":
+            continue
+
+        long_flags = [
+            arg.value[2:]
+            for arg in node.args
+            if (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value.startswith("--")
+            )
+        ]
+        if not long_flags:
+            continue
+
+        dest = None
+        default_value = None
+        has_default = False
+        for keyword in node.keywords:
+            if keyword.arg == "dest":
+                try:
+                    dest = ast.literal_eval(keyword.value)
+                except (ValueError, SyntaxError):
+                    dest = None
+            if keyword.arg == "default":
+                try:
+                    default_value = ast.literal_eval(keyword.value)
+                    has_default = True
+                except (ValueError, SyntaxError):
+                    has_default = False
+
+        if not has_default:
+            continue
+
+        arg_name = dest or long_flags[0]
+        defaults[arg_name] = default_value
+
+    return defaults
+
+
+def _format_unknown_script_argument_error(
+    invalid_args: list[str],
+    valid_args: set[str],
+    script_path: Path,
+) -> str:
+    """Build a user-facing validation error for unsupported script args."""
+    lines = [
+        f"Script '{script_path}' does not define these argument(s): "
+        f"{', '.join(invalid_args)}."
+    ]
+
+    suggestion_lines = []
+    for invalid_arg in invalid_args:
+        matches = difflib.get_close_matches(invalid_arg, sorted(valid_args), n=3, cutoff=0.5)
+        if matches:
+            suggestion_lines.append(
+                f"{invalid_arg} -> {', '.join(matches)}"
+            )
+    if suggestion_lines:
+        lines.append("Closest matches:")
+        lines.extend(f"  {line}" for line in suggestion_lines)
+
+    preview_args = ", ".join(sorted(valid_args)[:12])
+    if len(valid_args) > 12:
+        preview_args += ", ..."
+    lines.append(f"Known script arguments include: {preview_args}")
+    lines.append(
+        "If you intended a submit-only setting, keep it out of `default_args`."
+    )
+    return "\n".join(lines)
+
+
+def _validate_script_argument_names(
+    script_path: Path,
+    arg_specs: dict[str, dict[str, Any]],
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Abort before submission if config/CLI args are not defined by the script."""
+    valid_args = _extract_script_argument_names(script_path)
+    if not valid_args:
+        _warn(
+            f"Could not discover argparse arguments in '{script_path}'. "
+            "Skipping submit-side argument-name validation."
+        )
+        return
+
+    provided_args = [
+        key for key in arg_specs if key not in SUBMIT_INTERNAL_ARGUMENTS
+    ]
+    invalid_args = sorted(key for key in provided_args if key not in valid_args)
+    if invalid_args:
+        parser.error(
+            _format_unknown_script_argument_error(
+                invalid_args,
+                valid_args,
+                script_path,
+            )
+        )
 
 
 def arg_to_string(val: Any) -> str:
@@ -524,6 +750,7 @@ def _build_argument_combinations(
 def _validate_prior_combinations(
     combinations: list[tuple[Any, ...]],
     keys: list[str],
+    script_arg_defaults: dict[str, Any] | None = None,
 ) -> list[tuple[Any, ...]]:
     """Filter out invalid ``(data_name, prior_name)`` combinations."""
     if "prior_name" not in keys or "data_name" not in keys:
@@ -531,18 +758,25 @@ def _validate_prior_combinations(
 
     pn_idx = keys.index("prior_name")
     dn_idx = keys.index("data_name")
+    mean_fn_idx = keys.index("mean_fn_type") if "mean_fn_type" in keys else None
+    default_mean_fn = None
+    if script_arg_defaults is not None:
+        default_mean_fn = script_arg_defaults.get("mean_fn_type")
 
     valid = []
-    warned: set[tuple[str, str]] = set()
+    warned: set[tuple[str, str, str | None]] = set()
     for combo in combinations:
         data_name = str(combo[dn_idx])
         prior_name = str(combo[pn_idx]).strip("'\"")
-        is_ok, _, err = validate_prior(data_name, prior_name)
+        mean_fn = default_mean_fn
+        if mean_fn_idx is not None:
+            mean_fn = str(combo[mean_fn_idx])
+        is_ok, _, err = validate_prior(data_name, prior_name, mean_fn=mean_fn)
         if is_ok:
             valid.append(combo)
             continue
 
-        pair = (data_name, prior_name)
+        pair = (data_name, prior_name, mean_fn)
         if pair in warned:
             continue
 
@@ -808,6 +1042,13 @@ def main() -> None:
         help="List available priors for given dataset(s) and exit.",
     )
     parser.add_argument(
+        "--show-status",
+        nargs="+",
+        metavar="STATUS_PATH",
+        default=None,
+        help="Show progress from one or more .status files or directories and exit.",
+    )
+    parser.add_argument(
         "--skip-prior-validation",
         action="store_true",
         default=False,
@@ -820,8 +1061,12 @@ def main() -> None:
         _handle_list_priors(args.list_priors)
         return
 
+    if args.show_status is not None:
+        _show_status(args.show_status, parser)
+        return
+
     if args.script is None:
-        parser.error("--script is required when not using --list-priors")
+        parser.error("--script is required when not using --list-priors or --show-status")
 
     args.mode = ExecutionMode.from_str(args.mode)
     config_file = args.config_file.resolve()
@@ -872,6 +1117,10 @@ def main() -> None:
         script_path = _resolve_config_path(script_cfg["path"], config_file)
     except FileNotFoundError as err:
         parser.error(str(err))
+    try:
+        script_arg_defaults = _extract_script_argument_defaults(script_path)
+    except ValueError as err:
+        parser.error(str(err))
 
     default_args = script_cfg.get("default_args", {})
     try:
@@ -880,13 +1129,18 @@ def main() -> None:
         parser.error(str(err))
 
     _apply_cli_overrides(arg_specs, unknown, parser)
+    _validate_script_argument_names(script_path, arg_specs, parser)
     submission_batch_size = _pop_submission_batch_size(arg_specs)
 
     keys, all_combinations = _build_argument_combinations(arg_specs)
 
     if not args.skip_prior_validation and "prior_name" in keys:
         pre_count = len(all_combinations)
-        all_combinations = _validate_prior_combinations(all_combinations, keys)
+        all_combinations = _validate_prior_combinations(
+            all_combinations,
+            keys,
+            script_arg_defaults=script_arg_defaults,
+        )
         skipped = pre_count - len(all_combinations)
         if skipped:
             print(f"Skipped {skipped} combination(s) with invalid priors.\n")
@@ -929,6 +1183,9 @@ def main() -> None:
         if partition_profile is not None:
             print(f"Using partition defaults for: {partition_profile}")
         print()
+        status_dir = _resolve_status_dir(str(mode_specific_overrides["slurm_log_dir"]))
+    else:
+        status_dir = _resolve_status_dir("logs")
 
     for batch_idx, logical_job_batch in enumerate(physical_jobs):
         batch_combos = _flatten_logical_job_batch(logical_job_batch)
@@ -958,6 +1215,8 @@ def main() -> None:
             "command_wrapper": execution_settings.command_wrapper,
             "script_path": str(script_path),
             "working_directory": str(Path.cwd()),
+            "job_name": name,
+            "status_dir": status_dir,
             "command_suffixes": command_suffixes,
             "runtime_name": execution_settings.runtime_name,
             "slurm_partition_profile": partition_profile,
