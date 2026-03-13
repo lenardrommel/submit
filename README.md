@@ -140,6 +140,18 @@ mode:
   slurm:
     template: "./submit/templates/slurm_job.sh.j2"
     runtime: "singularity"
+    slurm_defaults:
+      nodes: 1
+      ntasks: 1
+      slurm_log_dir: "./logs"
+    partition_defaults:
+      2080-galvani:
+        gres: "gpu:1"
+        cpus_per_task: 12
+        mem_per_cpu: "12G"
+        time_limit: "3-00:00:00"
+    partition_aliases:
+      2080: "2080-galvani"
 
 runtime:
   venv:
@@ -202,6 +214,16 @@ Run a SLURM job with custom parameters:
 ```bash
 python submit/submit.py --mode slurm --script my_script --partition gpu --cpus-per-task 4 --mem-per-cpu 4G
 ```
+
+If your config defines `mode.slurm.partition_defaults`, then choosing a
+partition can auto-fill the other SLURM resources:
+
+```bash
+python submit/submit.py --mode slurm --partition 2080-galvani --script my_script
+python submit/submit.py --mode slurm --partition 2080 --script my_script
+```
+
+The second form uses `mode.slurm.partition_aliases`.
 
 ### Batched Execution
 

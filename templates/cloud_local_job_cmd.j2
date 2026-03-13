@@ -5,10 +5,37 @@
 cd {{ working_directory }}
 export PYTHONPATH="{{ working_directory }}${PYTHONPATH:+:$PYTHONPATH}"
 {% endif -%}
+status_dir="{{ status_dir }}"
+mkdir -p "$status_dir"
+status_file="$status_dir/{{ job_name }}_${SLURM_JOB_ID:-$$}.status"
+
+write_status() {
+cat > "$status_file" <<EOF
+job_name={{ job_name }}
+job_id=${SLURM_JOB_ID:-local}
+state=$1
+current=$2
+total={{ command_suffixes | length }}
+updated_at=$(date -Is)
+current_command=$3
+EOF
+}
+
+echo "[submit] status file: $status_file"
+write_status pending 0 ""
 {% for suffix in command_suffixes -%}
+echo "[submit] START {{ loop.index }}/{{ command_suffixes | length }}: {{ python_cmd }} {{ script_path }} {{ suffix }}"
+write_status running {{ loop.index }} "{{ python_cmd }} {{ script_path }} {{ suffix }}"
 {% if command_wrapper -%}
 {{ command_wrapper }} "{{ python_cmd }} {{ script_path }} {{ suffix }}"
 {% else -%}
 {{ python_cmd }} {{ script_path }} {{ suffix }}
 {% endif -%}
+status=$?
+if [ "$status" -ne 0 ]; then
+  write_status failed {{ loop.index }} "{{ python_cmd }} {{ script_path }} {{ suffix }}"
+  exit "$status"
+fi
+echo "[submit] DONE {{ loop.index }}/{{ command_suffixes | length }}"
 {% endfor -%}
+write_status completed {{ command_suffixes | length }} ""
