@@ -237,6 +237,52 @@ With that configuration, `submit` creates three logical jobs, one per `seed`, an
 each logical job runs the three `param1` values sequentially. If
 `slurm_batch_size` is also set, it batches whole logical jobs on top of that.
 
+You can also use a top-level shorthand if you prefer to keep the parameter
+values as plain lists:
+
+```yaml
+scripts:
+  my_script:
+    default_args:
+      param1: ["value1", "value2", "value3"]
+      seed: [0, 1, 2]
+      iter: [param1]
+```
+
+Both YAML list styles work there, so this is equivalent:
+
+```yaml
+iter:
+  - param1
+```
+
+### Testing with Docker
+
+For fast SLURM emulation, this repository ships a fake-`sbatch` test path that
+runs on Linux in Docker without starting a real cluster. It covers:
+
+- batch-script rendering
+- `sbatch` invocation
+- CLI-level SLURM planning with `iter: true`
+
+Run it with:
+
+```bash
+docker compose -f docker-compose.test.yml build
+docker compose -f docker-compose.test.yml run --rm submit-tests
+```
+
+The Docker test runner targets only the submit-focused tests:
+
+- `tests/test_submit_framework.py`
+- `tests/test_slurm_executor.py`
+- `tests/test_submit_cli_slurm.py`
+
+For a real multi-container SLURM environment, a vendored cluster setup is
+available under `submit/slurm-docker-cluster/`. That is the next step when the
+fake-`sbatch` path is green and you want to validate `sbatch`, `squeue`, and
+cluster behavior more end-to-end.
+
 ### Auto-Discovering FSP Priors
 
 When submitting FSP jobs, you can let `submit` read calibrated prior hashes from

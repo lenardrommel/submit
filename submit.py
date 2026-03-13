@@ -177,7 +177,22 @@ class SlurmJob:
         script_fp.write_text(self._render())
         script_fp.chmod(0o700)
 
-        subprocess.run(["sbatch", str(script_fp)], check=True)
+        result = subprocess.run(
+            ["sbatch", str(script_fp)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            error_output = (result.stderr or result.stdout).strip()
+            raise SystemExit(
+                f"sbatch failed for job '{self._job_name}': {error_output}\n"
+                f"Generated script kept at: {script_fp}\n"
+                "Check the requested SLURM resources such as --partition, "
+                "--gres, --cpus-per-task, --mem-per-cpu, and --time."
+            )
+        if result.stdout.strip():
+            print(result.stdout.strip())
         script_fp.unlink()
 
 
@@ -191,6 +206,34 @@ JOB_OPTIONS = {
 def _warn(message: str) -> None:
     """Print a warning message."""
     print(f"WARNING: {message}")
+
+
+def _format_yaml_load_error(config_file: Path, err: yaml.YAMLError) -> str:
+    """Return a user-facing YAML parse error with submit-specific hints."""
+    parts = [f"Invalid YAML in '{config_file}'."]
+
+    problem_mark = getattr(err, "problem_mark", None)
+    if problem_mark is not None:
+        parts.append(
+            f"Location: line {problem_mark.line + 1}, column {problem_mark.column + 1}."
+        )
+
+    problem = getattr(err, "problem", None)
+    if problem:
+        parts.append(f"YAML parser message: {problem}.")
+    else:
+        parts.append(str(err))
+
+    parts.append(
+        "If this is related to `iter`, use one of these supported forms:"
+    )
+    parts.append("1. `param_name: {values: [...], iter: true}`")
+    parts.append("2. `param_name: [...]` together with `iter: [param_name]`")
+    parts.append(
+        "Do not place `iter:` beside a dashed YAML list under the same parameter."
+    )
+
+    return " ".join(parts)
 
 
 def arg_to_string(val: Any) -> str:
@@ -215,11 +258,21 @@ def _as_value_list(value: Any) -> list[Any]:
 def _normalize_arg_specs(default_args: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Normalize YAML argument definitions to ``{values, iter}`` records."""
     arg_specs: dict[str, dict[str, Any]] = {}
+    iter_arg_names: set[str] = set()
 
-    if "iter" in default_args and not (
-        isinstance(default_args["iter"], dict) and "values" in default_args["iter"]
-    ):
-        _warn(LEGACY_ITER_WARNING)
+    if "iter" in default_args:
+        iter_value = default_args["iter"]
+        if isinstance(iter_value, str):
+            iter_arg_names.add(iter_value)
+        elif isinstance(iter_value, list):
+            if not all(isinstance(item, str) for item in iter_value):
+                raise ValueError(
+                    "Top-level `iter` must contain only argument names when "
+                    "provided as a list."
+                )
+            iter_arg_names.update(iter_value)
+        elif not (isinstance(iter_value, dict) and "values" in iter_value):
+            _warn(LEGACY_ITER_WARNING)
 
     for key, value in default_args.items():
         if key == "iter" and not (isinstance(value, dict) and "values" in value):
@@ -244,6 +297,13 @@ def _normalize_arg_specs(default_args: dict[str, Any]) -> dict[str, dict[str, An
             continue
 
         arg_specs[key] = {"values": _as_value_list(value), "iter": False}
+
+    for iter_arg_name in iter_arg_names:
+        if iter_arg_name not in arg_specs:
+            raise ValueError(
+                f"Top-level `iter` references unknown argument '{iter_arg_name}'."
+            )
+        arg_specs[iter_arg_name]["iter"] = True
 
     return arg_specs
 
@@ -692,8 +752,11 @@ def main() -> None:
     else:
         mode_specific_overrides = {}
 
-    with config_file.open("r") as f:
-        config = yaml.safe_load(f)
+    try:
+        with config_file.open("r") as f:
+            config = yaml.safe_load(f)
+    except yaml.YAMLError as err:
+        parser.error(_format_yaml_load_error(config_file, err))
 
     try:
         execution_settings = _resolve_execution_settings(
