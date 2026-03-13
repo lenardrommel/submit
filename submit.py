@@ -43,6 +43,26 @@ LEGACY_ITER_WARNING = (
     "Top-level `iter` in `default_args` is deprecated and ignored. "
     "Use `param_name: {values: [...], iter: true}` instead."
 )
+DEFAULT_SLURM_RESOURCES: dict[str, Any] = {
+    "partition": "2080-galvani",
+    "nodes": 1,
+    "ntasks": 1,
+    "cpus_per_task": 12,
+    "mem_per_cpu": "4G",
+    "gres": "gpu:1",
+    "time_limit": "3-00:00:00",
+    "slurm_log_dir": "./logs",
+}
+SLURM_RESOURCE_LABELS = {
+    "partition": "--partition",
+    "nodes": "--nodes",
+    "ntasks": "--ntasks",
+    "cpus_per_task": "--cpus-per-task",
+    "mem_per_cpu": "--mem-per-cpu",
+    "gres": "--gres",
+    "time_limit": "--time",
+    "slurm_log_dir": "--slurm_log_dir",
+}
 
 
 class ExecutionMode(Enum):
@@ -185,11 +205,24 @@ class SlurmJob:
         )
         if result.returncode != 0:
             error_output = (result.stderr or result.stdout).strip()
+            resources = self._vars.get("slurm_resources_summary", "(unknown)")
+            partition = self._vars.get("partition")
+            profile_name = self._vars.get("slurm_partition_profile")
+            profile_hint = ""
+            if partition and not profile_name:
+                profile_hint = (
+                    "\nNo partition defaults were configured for this partition. "
+                    "You can either pass --gres/--cpus-per-task/--mem-per-cpu/"
+                    "--time explicitly, or add "
+                    f"`mode.slurm.partition_defaults.{partition}` to the config."
+                )
             raise SystemExit(
                 f"sbatch failed for job '{self._job_name}': {error_output}\n"
+                f"Effective SLURM resources: {resources}\n"
                 f"Generated script kept at: {script_fp}\n"
                 "Check the requested SLURM resources such as --partition, "
                 "--gres, --cpus-per-task, --mem-per-cpu, and --time."
+                f"{profile_hint}"
             )
         if result.stdout.strip():
             print(result.stdout.strip())
@@ -234,6 +267,59 @@ def _format_yaml_load_error(config_file: Path, err: yaml.YAMLError) -> str:
     )
 
     return " ".join(parts)
+
+
+def _format_slurm_resources_summary(resources: dict[str, Any]) -> str:
+    """Return a compact string of effective SLURM resources."""
+    ordered_keys = [
+        "partition",
+        "nodes",
+        "ntasks",
+        "cpus_per_task",
+        "mem_per_cpu",
+        "gres",
+        "time_limit",
+    ]
+    return ", ".join(f"{key}={resources[key]}" for key in ordered_keys)
+
+
+def _resolve_slurm_resource_settings(
+    mode_cfg: dict[str, Any],
+    cli_overrides: dict[str, Any],
+) -> tuple[dict[str, Any], str | None, tuple[str, str] | None]:
+    """Resolve effective SLURM resources from defaults, partition profiles, and CLI."""
+    resources = dict(DEFAULT_SLURM_RESOURCES)
+
+    configured_defaults = mode_cfg.get("slurm_defaults", {})
+    if configured_defaults:
+        resources.update({key: value for key, value in configured_defaults.items() if value is not None})
+
+    requested_partition = cli_overrides.get("partition") or resources.get("partition")
+    partition_aliases = {
+        str(key): str(value)
+        for key, value in mode_cfg.get("partition_aliases", {}).items()
+    }
+    partition_alias = None
+    resolved_partition = requested_partition
+    if requested_partition in partition_aliases:
+        resolved_partition = partition_aliases[requested_partition]
+        partition_alias = (requested_partition, resolved_partition)
+
+    partition_defaults = {
+        str(key): value for key, value in mode_cfg.get("partition_defaults", {}).items()
+    }
+    matched_profile = None
+    if resolved_partition is not None:
+        partition_profile = partition_defaults.get(resolved_partition)
+        if partition_profile is not None:
+            resources.update({key: value for key, value in partition_profile.items() if value is not None})
+            matched_profile = resolved_partition
+        resources["partition"] = resolved_partition
+
+    resources.update({key: value for key, value in cli_overrides.items() if value is not None})
+    if partition_alias is not None:
+        resources["partition"] = partition_alias[1]
+    return resources, matched_profile, partition_alias
 
 
 def arg_to_string(val: Any) -> str:
@@ -703,6 +789,7 @@ def main() -> None:
     )
     parser.add_argument("--partition", type=str, help="SLURM partition")
     parser.add_argument("--nodes", type=int, help="Number of nodes")
+    parser.add_argument("--ntasks", type=int, help="Number of tasks")
     parser.add_argument("--cpus-per-task", type=int, help="CPUs per task")
     parser.add_argument("--mem-per-cpu", type=str, help="Memory per CPU (e.g. 4G)")
     parser.add_argument("--gres", type=str, help="Generic resources (e.g. gpu:1)")
@@ -710,7 +797,7 @@ def main() -> None:
     parser.add_argument(
         "--slurm_log_dir",
         type=str,
-        default="./logs",
+        default=None,
         help="Log directory for slurm job output.",
     )
     parser.add_argument(
@@ -739,19 +826,6 @@ def main() -> None:
     args.mode = ExecutionMode.from_str(args.mode)
     config_file = args.config_file.resolve()
 
-    if args.mode == ExecutionMode.SLURM:
-        mode_specific_overrides = {
-            "partition": args.partition,
-            "nodes": args.nodes,
-            "cpus_per_task": args.cpus_per_task,
-            "mem_per_cpu": args.mem_per_cpu,
-            "gres": args.gres,
-            "time_limit": args.time,
-            "slurm_log_dir": args.slurm_log_dir,
-        }
-    else:
-        mode_specific_overrides = {}
-
     try:
         with config_file.open("r") as f:
             config = yaml.safe_load(f)
@@ -767,6 +841,31 @@ def main() -> None:
         )
     except (FileNotFoundError, ValueError) as err:
         parser.error(str(err))
+
+    if args.mode == ExecutionMode.SLURM:
+        mode_cfg = config["mode"][args.mode.value]
+        cli_slurm_overrides = {
+            "partition": args.partition,
+            "nodes": args.nodes,
+            "ntasks": args.ntasks,
+            "cpus_per_task": args.cpus_per_task,
+            "mem_per_cpu": args.mem_per_cpu,
+            "gres": args.gres,
+            "time_limit": args.time,
+            "slurm_log_dir": args.slurm_log_dir,
+        }
+        (
+            mode_specific_overrides,
+            partition_profile,
+            partition_alias,
+        ) = _resolve_slurm_resource_settings(
+            mode_cfg,
+            cli_slurm_overrides,
+        )
+    else:
+        mode_specific_overrides = {}
+        partition_profile = None
+        partition_alias = None
 
     script_cfg = config["scripts"][args.script]
     try:
@@ -817,6 +916,20 @@ def main() -> None:
     else:
         print("  (no parameters specified)\n")
 
+    if args.mode == ExecutionMode.SLURM:
+        print(
+            "Resolved SLURM resources: "
+            f"{_format_slurm_resources_summary(mode_specific_overrides)}"
+        )
+        if partition_alias is not None:
+            print(
+                "Resolved partition alias: "
+                f"{partition_alias[0]} -> {partition_alias[1]}"
+            )
+        if partition_profile is not None:
+            print(f"Using partition defaults for: {partition_profile}")
+        print()
+
     for batch_idx, logical_job_batch in enumerate(physical_jobs):
         batch_combos = _flatten_logical_job_batch(logical_job_batch)
         command_suffixes = []
@@ -847,6 +960,13 @@ def main() -> None:
             "working_directory": str(Path.cwd()),
             "command_suffixes": command_suffixes,
             "runtime_name": execution_settings.runtime_name,
+            "slurm_partition_profile": partition_profile,
+            "slurm_partition_alias": partition_alias,
+            "slurm_resources_summary": (
+                _format_slurm_resources_summary(mode_specific_overrides)
+                if args.mode == ExecutionMode.SLURM
+                else ""
+            ),
             "script_args": {},  # backward compatibility for existing templates
             "pykernel": execution_settings.legacy_pykernel,
         }

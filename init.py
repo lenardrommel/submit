@@ -16,7 +16,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -251,6 +251,159 @@ From: python:{python_version}
         self.verbose_log(f"Total discovered scripts: {len(discovered_scripts)}")
         return discovered_scripts
 
+    @staticmethod
+    def _parse_sinfo_summary(output: str) -> List[Dict[str, str]]:
+        """Parse ``sinfo -s`` output into partition metadata records."""
+        partitions: List[Dict[str, str]] = []
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("PARTITION"):
+                continue
+
+            columns = stripped.split()
+            if len(columns) < 4:
+                continue
+
+            partitions.append(
+                {
+                    "partition": columns[0],
+                    "avail": columns[1],
+                    "timelimit": columns[2],
+                    "nodes": columns[3],
+                    "nodelist": " ".join(columns[4:]) if len(columns) > 4 else "",
+                }
+            )
+
+        return partitions
+
+    @staticmethod
+    def _default_partition_alias(partition_name: str) -> str:
+        """Return a short alias candidate for a partition name."""
+        if partition_name.endswith("-galvani"):
+            return partition_name[: -len("-galvani")]
+        return partition_name
+
+    @staticmethod
+    def _infer_partition_profile(partition_info: Dict[str, str]) -> Dict[str, Any]:
+        """Infer a usable starting SLURM profile from partition metadata."""
+        partition_name = partition_info["partition"].lower()
+        profile: Dict[str, Any] = {"time_limit": partition_info["timelimit"]}
+
+        if any(token in partition_name for token in ("2080", "a100", "v100", "gpu")):
+            profile.update(
+                {
+                    "gres": "gpu:1",
+                    "cpus_per_task": 12,
+                    "mem_per_cpu": "12G",
+                }
+            )
+        elif "cpu" in partition_name:
+            profile.update(
+                {
+                    "cpus_per_task": 4,
+                    "mem_per_cpu": "4G",
+                }
+            )
+        else:
+            profile.update(
+                {
+                    "cpus_per_task": 4,
+                    "mem_per_cpu": "4G",
+                }
+            )
+
+        return profile
+
+    def _discover_slurm_partition_profiles(
+        self,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Best-effort discovery of SLURM partitions via ``sinfo -s``."""
+        try:
+            result = subprocess.run(
+                ["sinfo", "-s"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except FileNotFoundError:
+            self.log("`sinfo` not found. Skipping SLURM partition discovery.", "WARNING")
+            return {}, {}
+        except subprocess.CalledProcessError as err:
+            self.log(
+                f"`sinfo -s` failed. Skipping SLURM partition discovery. {err}",
+                "WARNING",
+            )
+            return {}, {}
+
+        partitions = self._parse_sinfo_summary(result.stdout)
+        if not partitions:
+            self.log("No partitions discovered from `sinfo -s`.", "WARNING")
+            return {}, {}
+
+        self.log(f"Discovered {len(partitions)} SLURM partition(s) via `sinfo -s`.")
+
+        partition_defaults: dict[str, dict[str, Any]] = {}
+        partition_aliases: dict[str, str] = {}
+
+        for partition_info in partitions:
+            partition_name = partition_info["partition"]
+            inferred_profile = self._infer_partition_profile(partition_info)
+            alias_default = self._default_partition_alias(partition_name)
+
+            if self.interactive:
+                register = self.prompt_yes_no(
+                    f"Register partition defaults for '{partition_name}'?",
+                    True,
+                )
+                if not register:
+                    continue
+
+                alias_value = self.prompt_input(
+                    f"Alias for '{partition_name}' (leave equal to name to skip alias)",
+                    alias_default,
+                )
+                time_limit = self.prompt_input(
+                    f"Default --time for '{partition_name}'",
+                    str(inferred_profile.get("time_limit", "")),
+                )
+                cpus_per_task = self.prompt_input(
+                    f"Default --cpus-per-task for '{partition_name}'",
+                    str(inferred_profile.get("cpus_per_task", "")),
+                )
+                mem_per_cpu = self.prompt_input(
+                    f"Default --mem-per-cpu for '{partition_name}'",
+                    str(inferred_profile.get("mem_per_cpu", "")),
+                )
+                gres = self.prompt_input(
+                    f"Default --gres for '{partition_name}' (blank or 'none' to omit)",
+                    str(inferred_profile.get("gres", "")),
+                )
+
+                profile: dict[str, Any] = {}
+                if time_limit:
+                    profile["time_limit"] = time_limit
+                if cpus_per_task:
+                    try:
+                        profile["cpus_per_task"] = int(cpus_per_task)
+                    except ValueError:
+                        self.log(
+                            f"Ignoring non-integer cpus-per-task value for '{partition_name}': {cpus_per_task}",
+                            "WARNING",
+                        )
+                if mem_per_cpu:
+                    profile["mem_per_cpu"] = mem_per_cpu
+                if gres and gres.lower() not in {"none", "null"}:
+                    profile["gres"] = gres
+                inferred_profile = profile
+            else:
+                alias_value = alias_default
+
+            partition_defaults[partition_name] = inferred_profile
+            if alias_value and alias_value != partition_name:
+                partition_aliases[alias_value] = partition_name
+
+        return partition_defaults, partition_aliases
+
     def create_run_yaml(self) -> Path:
         """Create run.yaml configuration file in submit directory."""
         run_yaml_path = self.submit_dir / "run.yaml"
@@ -267,12 +420,19 @@ From: python:{python_version}
         for name, path in discovered_scripts:
             self.log(f"  - {name}: {path}")
 
+        partition_defaults, partition_aliases = self._discover_slurm_partition_profiles()
+
         # Build configuration
         config = {
             "mode": {
                 "slurm": {
                     "template": "./submit/templates/slurm_job.sh.j2",
                     "runtime": "singularity",
+                    "slurm_defaults": {
+                        "nodes": 1,
+                        "ntasks": 1,
+                        "slurm_log_dir": "./logs",
+                    },
                 },
                 "cloud_local": {
                     "template": "./submit/templates/cloud_local_job_cmd.j2",
@@ -305,6 +465,11 @@ From: python:{python_version}
             },
             "scripts": {},
         }
+
+        if partition_defaults:
+            config["mode"]["slurm"]["partition_defaults"] = partition_defaults
+        if partition_aliases:
+            config["mode"]["slurm"]["partition_aliases"] = partition_aliases
 
         # Add discovered scripts
         for script_name, script_path in discovered_scripts:
