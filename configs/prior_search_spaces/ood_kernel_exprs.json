@@ -1,0 +1,19 @@
+{
+  "spatial_kernel_expr": [
+    "m12 + m32 + m52 + m72 + rq",
+    "m12 + m32 + m52 + m72 + rq + rq + rq",
+    "m12 + m32 + m32 + m32"
+  ],
+  "function_kernel_expr": [
+    "h1 + sm32 + sm32 + sm32",
+    "h1 + sm32 + sm52 + sm72 + sm72",
+    "h1 + sm12 + sm52 + sm72 + srq + srq",
+    "h1 + srq + srq + srq"
+  ],
+  "time_kernel_expr": [
+    "ar1"
+  ],
+  "mean_fn_type": [
+    "zero"
+  ]
+}

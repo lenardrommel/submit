@@ -41,23 +41,40 @@ scripts:
     default_args:
       data_name:
         values: ["pos_2", "pos_neg_2", "pos_neg_flip_2", "base_2", "flip_2"]
-        iter: true
       max_iter: 100
-      num_samples: 1000
+      num_samples: [100, 1000]
+      iter: true
+      with_noise: true
+      num_spatial_subsample: 1
       spatial_kernel_expr:
         values:
-          - "'m12 + m32 + m52 + m72 + rq'"
-          - "'m12 + m32 + m52 + m72 + rq'"
-          - "'m12 + m32 + m52 + m72 + rq + rq + rq'"
-          - "'m12 + m32 + m32 + m32'"
+          - "'m12 + m12 + m12'"
+          - "'m12 + m12 + m32'"
+          - "'m12 + m12 + m12 + m32'"
+          - "'m12 + m32 + m52'"
+          - "'m12 + m12 + m32 + m52'"
+          - "'m12 + m32 + m52 + m72'"
+          - "'m12 + m12 + m12 + m32 + m32 + m52 + m52 + m72 + m72 + m72'"
+          - "'m12 + m12 + m12 + m32 + m32 + m52 + m52 + m72 + m72 + m72 + m72 + m72'"
         iter: true
+
+
       function_kernel_expr:
         values:
+          - "'h1'"
+          - "'h1 + sm12 + sm12 + sm32'"
+          - "'h1 + sm12 + sm12 + sm12 + sm32 + sm32 + sm32'"
           - "'h1 + sm32 + sm32 + sm32'"
+          - "'h1 + sm32 + sm32 + sm32 + sm52 + sm52 + sm52'"
           - "'h1 + sm32 + sm52 + sm72 + sm72'"
-          - "'h1 + sm12 + sm52 + sm72 + sqr + sqr'"
-          - "'h1 + sqr + sqr + sqr'"
-        iter: true
+          - "'h1 + sm12 + sm32 + sm52 + sm72'"
+          - "'h1 + sm32 + sm52 + sm72 + sm72 + sm72 + sm72'"
+      time_kernel_expr:
+        values:
+          - "'ar1'"
+          - "'m12'"
+          - "'m12 + m32'"
+
 
   fit_prior_apebench:
     path: "./luno_experiments/scripts/fit.py"
